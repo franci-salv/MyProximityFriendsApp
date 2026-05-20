@@ -1,13 +1,22 @@
 import { useMemo, useState } from 'react';
 import { SIMULATOR_CITIES } from '../data/cities';
-import { getEmailRedirectUrl, hasSupabaseEnv, supabase, supabaseEnvIssue, upsertProfile } from '../lib/supabase';
+import {
+  formatAuthConfigError,
+  getEmailRedirectUrl,
+  hasSupabaseEnv,
+  supabase,
+  supabaseEnvIssue,
+  upsertProfile,
+} from '../lib/supabase';
 import type { AppCity, UserProfile } from '../types/models';
 
 interface AuthGateProps {
   onAuthenticated: (profile: UserProfile) => void;
+  /** Re-read session from Supabase after magic-link return (updates App session state). */
+  onRefreshSession?: () => Promise<void>;
 }
 
-export function AuthGate({ onAuthenticated }: AuthGateProps) {
+export function AuthGate({ onAuthenticated, onRefreshSession }: AuthGateProps) {
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [homeCity, setHomeCity] = useState<AppCity>('Eindhoven');
@@ -25,16 +34,25 @@ export function AuthGate({ onAuthenticated }: AuthGateProps) {
   }, [name]);
 
   const handleMagicLink = async () => {
-    if (!hasSupabaseEnv || !email.trim()) return;
+    if (!email.trim()) return;
+    if (!hasSupabaseEnv) {
+      setStatus(supabaseEnvIssue ?? 'Supabase is not configured for this build.');
+      return;
+    }
     setIsBusy(true);
     setStatus(null);
-    const redirectTo = getEmailRedirectUrl();
-    const { error } = await supabase.auth.signInWithOtp({
-      email: email.trim(),
-      options: { emailRedirectTo: redirectTo },
-    });
-    setIsBusy(false);
-    setStatus(error ? error.message : 'Magic link sent. Open your email to continue.');
+    try {
+      const redirectTo = getEmailRedirectUrl();
+      const { error } = await supabase.auth.signInWithOtp({
+        email: email.trim(),
+        options: { emailRedirectTo: redirectTo },
+      });
+      setStatus(error ? error.message : 'Magic link sent. Open your email to continue.');
+    } catch (error) {
+      setStatus(formatAuthConfigError(error));
+    } finally {
+      setIsBusy(false);
+    }
   };
 
   const handleDemoMode = () => {
@@ -48,15 +66,33 @@ export function AuthGate({ onAuthenticated }: AuthGateProps) {
     });
   };
 
-  const handleSaveProfile = async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    if (!session?.user) return;
+  const handleConfirmedEmail = async () => {
+    if (!hasSupabaseEnv) return;
     setIsBusy(true);
     setStatus(null);
     try {
-      const row = await upsertProfile(session.user.id, name.trim() || email.split('@')[0] || 'Friend', homeCity);
+      if (onRefreshSession) {
+        await onRefreshSession();
+      }
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+      if (sessionError) {
+        setStatus(`Could not read your session: ${sessionError.message}`);
+        return;
+      }
+      if (!session?.user) {
+        setStatus(
+          'No active session yet. Open the magic link from the same browser, wait a few seconds, and try again — or tap Send magic link for a new email.',
+        );
+        return;
+      }
+      const row = await upsertProfile(
+        session.user.id,
+        name.trim() || session.user.email?.split('@')[0] || email.split('@')[0] || 'Friend',
+        homeCity,
+      );
       onAuthenticated({
         id: row.id,
         name: row.name,
@@ -126,7 +162,7 @@ export function AuthGate({ onAuthenticated }: AuthGateProps) {
             </button>
             <button
               className="rounded-xl bg-orange-100 px-4 py-2.5 text-sm font-medium text-zinc-800 transition hover:bg-orange-200 disabled:opacity-40"
-              onClick={handleSaveProfile}
+              onClick={handleConfirmedEmail}
               disabled={isBusy}
             >
               I confirmed email

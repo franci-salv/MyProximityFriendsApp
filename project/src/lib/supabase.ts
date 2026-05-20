@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { CITY_COORDINATES } from '../data/cities';
 import type {
   AppCity,
@@ -16,14 +16,22 @@ function trimEnv(value: unknown): string {
   return value.trim();
 }
 
+const PLACEHOLDER_SUPABASE_HOSTS = new Set([
+  'your-project-ref.supabase.co',
+  'placeholder.supabase.co',
+]);
+
 /** Normalize project URL for API calls — must be absolute http(s) with valid origin only. */
 function parseSupabaseProjectUrl(raw: string): string | null {
   if (!raw) return null;
-  const forbidding = ['undefined', 'null', 'your-project-ref.supabase.co'];
-  if (forbidding.includes(raw.toLowerCase())) return null;
+  const lower = raw.toLowerCase();
+  if (lower === 'undefined' || lower === 'null') return null;
   try {
     const url = new URL(raw);
     if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+    const hostname = url.hostname.toLowerCase();
+    if (!hostname || PLACEHOLDER_SUPABASE_HOSTS.has(hostname)) return null;
+    if (!hostname.endsWith('.supabase.co')) return null;
     // Supabase REST/auth expect the project origin (no stray path/query).
     const pathname = url.pathname.replace(/\/+$/, '');
     if (pathname !== '' && pathname !== '/') return null;
@@ -50,13 +58,18 @@ const validatedSupabaseUrl = parseSupabaseProjectUrl(rawSupabaseUrl);
 const keyLooksValid = isPlausibleSupabasePublishableOrAnonKey(rawSupabaseKey);
 const anySupabaseEnvHint = Boolean(rawSupabaseUrl || rawSupabaseKey);
 
+const PROD_MISSING_ENV_MESSAGE =
+  'This production build has no Supabase credentials. In Vercel → Project → Settings → Environment Variables, set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY for Production, then trigger a new deployment (Vite inlines env at build time).';
+
 function computeSupabaseEnvIssue(): string | null {
-  if (!anySupabaseEnvHint) return null;
+  if (!anySupabaseEnvHint) {
+    return import.meta.env.PROD ? PROD_MISSING_ENV_MESSAGE : null;
+  }
   if (!rawSupabaseUrl || !rawSupabaseKey) {
-    return 'Supabase is partially configured: set both VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (see .env.example), then restart the dev server or rebuild for production.';
+    return 'Supabase is partially configured: set both VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (see .env.example), then restart the dev server or redeploy production.';
   }
   if (!validatedSupabaseUrl) {
-    return 'VITE_SUPABASE_URL must be a full URL with protocol, e.g. https://abcd1234.supabase.co (no path, no quotes).';
+    return 'VITE_SUPABASE_URL must be a full https URL to your project, e.g. https://abcd1234.supabase.co (no path, no quotes, not the .env.example placeholder).';
   }
   if (!keyLooksValid) {
     return 'VITE_SUPABASE_ANON_KEY must be the public anon key from Supabase (JWT with three segments) or a publishable key starting with sb_publishable_.';
@@ -77,35 +90,61 @@ if (import.meta.env.PROD && supabaseEnvIssue) {
   console.error(`[supabase] ${supabaseEnvIssue}`);
 }
 
-const supabaseUrlForClient = hasSupabaseEnv && validatedSupabaseUrl ? validatedSupabaseUrl : 'https://placeholder.supabase.co';
-const supabaseKeyForClient = hasSupabaseEnv ? rawSupabaseKey : 'placeholder-anon-key';
-
-if (!hasSupabaseEnv && !anySupabaseEnvHint) {
+if (!hasSupabaseEnv && !import.meta.env.PROD) {
   console.warn(
-    '[supabase] Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY. Running in local mock mode.',
+    '[supabase] Missing or invalid VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY. Running in local mock mode.',
   );
 }
 
-export const supabase = createClient(supabaseUrlForClient, supabaseKeyForClient, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-  },
-});
+function createDisabledSupabaseProxy(): SupabaseClient {
+  const message = supabaseEnvIssue ?? 'Supabase is not configured.';
+  return new Proxy({} as SupabaseClient, {
+    get() {
+      throw new Error(message);
+    },
+  });
+}
+
+const supabaseClient: SupabaseClient | null =
+  hasSupabaseEnv && validatedSupabaseUrl
+    ? createClient(validatedSupabaseUrl, rawSupabaseKey, {
+        auth: {
+          persistSession: true,
+          autoRefreshToken: true,
+          /** Exchanges magic-link tokens from hash (implicit) or query (PKCE `?code=`) on first load. */
+          detectSessionInUrl: true,
+          flowType: 'pkce',
+        },
+      })
+    : null;
+
+/** Real client when configured; otherwise a proxy that throws (never calls fetch with a bad URL). */
+export const supabase: SupabaseClient = supabaseClient ?? createDisabledSupabaseProxy();
 
 /**
  * Absolute URL for magic-link redirect. Uses VITE_APP_BASE_URL when set and valid; otherwise current origin.
  */
 export function getEmailRedirectUrl(): string {
+  const fallback = window.location.origin;
   const raw = trimEnv(import.meta.env.VITE_APP_BASE_URL);
-  if (!raw) return window.location.origin;
+  if (!raw || raw.toLowerCase() === 'undefined' || raw.toLowerCase() === 'null') return fallback;
   try {
-    const resolved = new URL(raw, window.location.origin);
+    const resolved = new URL(raw, fallback);
+    if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return fallback;
+    if (!resolved.hostname) return fallback;
     return resolved.href.replace(/\/+$/, '');
   } catch {
-    return window.location.origin;
+    return fallback;
   }
+}
+
+/** User-facing hint when auth fetch fails due to misconfigured build-time env. */
+export function formatAuthConfigError(error: unknown): string {
+  if (error instanceof TypeError && /invalid value/i.test(error.message)) {
+    return `${supabaseEnvIssue ?? PROD_MISSING_ENV_MESSAGE} (fetch rejected an invalid URL — usual cause: missing VITE_SUPABASE_URL at build time.)`;
+  }
+  if (error instanceof Error) return error.message;
+  return 'Magic link failed. Check Supabase env on your host and redeploy.';
 }
 
 export async function simulateSupabaseCityWrite(userId: string, city: string): Promise<string> {

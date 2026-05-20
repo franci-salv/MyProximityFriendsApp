@@ -42,6 +42,20 @@ npm run dev
 
    If magic link or auth fails with a **fetch / invalid URL** error, the usual cause is a missing or malformed `VITE_SUPABASE_URL` at **build** time, or only one of the two Supabase vars set on the host.
 
+### Deploy on Vercel
+
+1. Import the repo and set **Root Directory** to `project` (where `package.json` and `vercel.json` live).
+2. In **Settings → Environment Variables**, add for **Production** (and Preview if you test PRs):
+
+   | Name | Example value |
+   |------|-----------------|
+   | `VITE_SUPABASE_URL` | `https://tnucsjuocybdekxujwsd.supabase.co` |
+   | `VITE_SUPABASE_ANON_KEY` | Your Supabase **anon** JWT or `sb_publishable_...` key (Project Settings → API) |
+   | `VITE_APP_BASE_URL` | `https://your-app.vercel.app` (optional; must match Supabase redirect allow-list) |
+
+3. **Redeploy** after saving env vars (Deployments → … → Redeploy). Changing env alone does not update an old bundle.
+4. In Supabase **Authentication → URL Configuration**, add your Vercel URL(s) under **Redirect URLs** and set **Site URL** to the same origin.
+
 7. (Optional) Seed a few users by signing in and creating/accepting invite codes from the app.
 
 ## MVP scope implemented

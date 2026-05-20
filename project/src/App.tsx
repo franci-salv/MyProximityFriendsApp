@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BellRing, List, Map, MapPin } from 'lucide-react';
-import type { Session } from '@supabase/supabase-js';
+import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
 import { AuthGate } from './components/AuthGate';
 import { ContactsPanel } from './components/ContactsPanel';
 import { HistoryTimeline } from './components/HistoryTimeline';
@@ -69,14 +69,22 @@ function App() {
       setIsAuthLoading(false);
       return;
     }
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setIsAuthLoading(false);
-    });
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+
+    const handleAuthChange = (event: AuthChangeEvent, nextSession: Session | null) => {
       setSession(nextSession);
-    });
-    return () => data.subscription.unsubscribe();
+      // Fires after GoTrue init (including URL/hash token exchange for magic links).
+      if (event === 'INITIAL_SESSION') {
+        setIsAuthLoading(false);
+      }
+    };
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(handleAuthChange);
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -173,7 +181,7 @@ function App() {
   const notifyUser = (message: string) => {
     if (!('Notification' in window)) return;
     if (Notification.permission === 'granted') {
-      new Notification('FriendApp Alert', { body: message, icon: '/vite.svg' });
+      new Notification('FriendApp Alert', { body: message, icon: '/favicon.svg' });
     }
   };
 
@@ -248,11 +256,38 @@ function App() {
     if (hasSupabaseEnv) {
       await supabase.auth.signOut();
     }
+    setAppError(null);
     setProfile(null);
     setSession(null);
     setHistory([]);
     setContacts(seedContacts);
   };
+
+  const refreshSessionAfterMagicLink = useCallback(async () => {
+    if (!hasSupabaseEnv) return;
+    const {
+      data: { session: nextSession },
+      error,
+    } = await supabase.auth.getSession();
+    if (error) {
+      setToast({
+        id: crypto.randomUUID(),
+        message: `Could not read your session: ${error.message}`,
+        visible: true,
+      });
+      return;
+    }
+    if (!nextSession) {
+      setToast({
+        id: crypto.randomUUID(),
+        message:
+          'No active session yet. Open the magic link from the same browser, wait a few seconds, and try again — or tap Send magic link for a new email.',
+        visible: true,
+      });
+      return;
+    }
+    setSession(nextSession);
+  }, []);
 
   const handleSimulatorCitySwitch = async (nextCity: AppCity) => {
     const changed = hasSignificantLocationChange(currentCity, nextCity);
@@ -327,10 +362,43 @@ function App() {
     return <main className="min-h-screen bg-gradient-to-b from-orange-50 via-amber-50 to-stone-100 px-4 py-8">Loading session...</main>;
   }
 
+  const isSignedIn = Boolean(session?.user);
+  const isProfileBootstrapping = hasSupabaseEnv && isSignedIn && !profile && !appError;
+
+  if (isProfileBootstrapping) {
+    return (
+      <main className="min-h-screen bg-gradient-to-b from-orange-50 via-amber-50 to-stone-100 px-4 py-8">
+        <p className="mx-auto mt-16 max-w-md text-center text-sm text-zinc-600">Signed in — setting up your profile…</p>
+      </main>
+    );
+  }
+
+  if (hasSupabaseEnv && isSignedIn && appError && !profile) {
+    return (
+      <main className="min-h-screen bg-gradient-to-b from-orange-50 via-amber-50 to-stone-100 px-4 py-8">
+        <ToastBanner toast={toast} />
+        <div className="mx-auto mt-10 w-full max-w-md rounded-3xl border border-rose-100 bg-white/90 p-6 shadow-lg backdrop-blur">
+          <h2 className="text-lg font-semibold text-zinc-900">Could not load your profile</h2>
+          <p className="mt-2 text-sm text-rose-800">{appError}</p>
+          <button
+            type="button"
+            onClick={() => {
+              void handleSignOut();
+            }}
+            className="mt-4 w-full rounded-xl bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-zinc-800"
+          >
+            Sign out and try again
+          </button>
+        </div>
+      </main>
+    );
+  }
+
   if (!profile) {
     return (
       <main className="min-h-screen bg-gradient-to-b from-orange-50 via-amber-50 to-stone-100 px-4 py-8">
-        <AuthGate onAuthenticated={handleOnboardingComplete} />
+        <ToastBanner toast={toast} />
+        <AuthGate onAuthenticated={handleOnboardingComplete} onRefreshSession={refreshSessionAfterMagicLink} />
       </main>
     );
   }
