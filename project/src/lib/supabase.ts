@@ -11,28 +11,102 @@ import type {
   ProximityEventRow,
 } from '../types/models';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+function trimEnv(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value.trim();
+}
 
-export const hasSupabaseEnv = Boolean(supabaseUrl && supabaseAnonKey);
+/** Normalize project URL for API calls — must be absolute http(s) with valid origin only. */
+function parseSupabaseProjectUrl(raw: string): string | null {
+  if (!raw) return null;
+  const forbidding = ['undefined', 'null', 'your-project-ref.supabase.co'];
+  if (forbidding.includes(raw.toLowerCase())) return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+    // Supabase REST/auth expect the project origin (no stray path/query).
+    const pathname = url.pathname.replace(/\/+$/, '');
+    if (pathname !== '' && pathname !== '/') return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
 
-if (!hasSupabaseEnv) {
+/** Accept legacy anon JWT or newer publishable keys (both work with supabase-js createClient). */
+function isPlausibleSupabasePublishableOrAnonKey(key: string): boolean {
+  if (!key) return false;
+  const lower = key.toLowerCase();
+  if (lower === 'undefined' || lower === 'null' || lower === 'your-anon-key') return false;
+  if (key.startsWith('sb_publishable_')) return true;
+  const parts = key.split('.');
+  return parts.length === 3 && parts.every((p) => p.length > 0);
+}
+
+const rawSupabaseUrl = trimEnv(import.meta.env.VITE_SUPABASE_URL);
+const rawSupabaseKey = trimEnv(import.meta.env.VITE_SUPABASE_ANON_KEY);
+
+const validatedSupabaseUrl = parseSupabaseProjectUrl(rawSupabaseUrl);
+const keyLooksValid = isPlausibleSupabasePublishableOrAnonKey(rawSupabaseKey);
+const anySupabaseEnvHint = Boolean(rawSupabaseUrl || rawSupabaseKey);
+
+function computeSupabaseEnvIssue(): string | null {
+  if (!anySupabaseEnvHint) return null;
+  if (!rawSupabaseUrl || !rawSupabaseKey) {
+    return 'Supabase is partially configured: set both VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (see .env.example), then restart the dev server or rebuild for production.';
+  }
+  if (!validatedSupabaseUrl) {
+    return 'VITE_SUPABASE_URL must be a full URL with protocol, e.g. https://abcd1234.supabase.co (no path, no quotes).';
+  }
+  if (!keyLooksValid) {
+    return 'VITE_SUPABASE_ANON_KEY must be the public anon key from Supabase (JWT with three segments) or a publishable key starting with sb_publishable_.';
+  }
+  return null;
+}
+
+export const supabaseEnvIssue = computeSupabaseEnvIssue();
+
+/** True only when URL and key are present and pass validation (avoids createClient / fetch with bad URL). */
+export const hasSupabaseEnv = Boolean(anySupabaseEnvHint && supabaseEnvIssue === null);
+
+if (import.meta.env.DEV && anySupabaseEnvHint && supabaseEnvIssue) {
+  console.error(`[supabase] ${supabaseEnvIssue}`);
+}
+
+if (import.meta.env.PROD && supabaseEnvIssue) {
+  console.error(`[supabase] ${supabaseEnvIssue}`);
+}
+
+const supabaseUrlForClient = hasSupabaseEnv && validatedSupabaseUrl ? validatedSupabaseUrl : 'https://placeholder.supabase.co';
+const supabaseKeyForClient = hasSupabaseEnv ? rawSupabaseKey : 'placeholder-anon-key';
+
+if (!hasSupabaseEnv && !anySupabaseEnvHint) {
   console.warn(
     '[supabase] Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY. Running in local mock mode.',
   );
 }
 
-export const supabase = createClient(
-  supabaseUrl || 'https://placeholder.supabase.co',
-  supabaseAnonKey || 'placeholder-anon-key',
-  {
-    auth: {
-      persistSession: true,
-      autoRefreshToken: true,
-      detectSessionInUrl: true,
-    },
+export const supabase = createClient(supabaseUrlForClient, supabaseKeyForClient, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
   },
-);
+});
+
+/**
+ * Absolute URL for magic-link redirect. Uses VITE_APP_BASE_URL when set and valid; otherwise current origin.
+ */
+export function getEmailRedirectUrl(): string {
+  const raw = trimEnv(import.meta.env.VITE_APP_BASE_URL);
+  if (!raw) return window.location.origin;
+  try {
+    const resolved = new URL(raw, window.location.origin);
+    return resolved.href.replace(/\/+$/, '');
+  } catch {
+    return window.location.origin;
+  }
+}
 
 export async function simulateSupabaseCityWrite(userId: string, city: string): Promise<string> {
   if (!hasSupabaseEnv) {

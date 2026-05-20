@@ -12,6 +12,11 @@ Private-beta location friend finder built with React, TypeScript, Tailwind, Supa
 npm run dev
 ```
 
+### `npm run dev` troubleshooting
+
+- If you see **“Port 5173 is in use”**, Vite automatically picks the next free port (for example `http://localhost:5174/`). Use that URL, stop the other process using 5173, or run `npx vite --port 5175`.
+- After changing any `VITE_*` variable, **restart** the dev server so Vite reloads env.
+
 ## Manual setup before launch
 
 1. Create a Supabase project.
@@ -23,9 +28,20 @@ npm run dev
    - Site URL: your production URL (or `http://localhost:5173` for local testing)
    - Add redirect URLs for local + production callback URLs.
 5. In Project Settings -> API, copy:
-   - Project URL -> `VITE_SUPABASE_URL`
-   - `anon` key -> `VITE_SUPABASE_ANON_KEY`
-6. Set environment variables in hosting platform.
+   - Project URL -> `VITE_SUPABASE_URL` (full URL with `https://`, no path)
+   - Public client key -> `VITE_SUPABASE_ANON_KEY`: use the **anon / public JWT** or a **publishable** key (`sb_publishable_...`); both work with `createClient` in the browser. Never put the **service_role** / secret key in the frontend.
+6. Set environment variables on the **hosting** platform and **redeploy** (Vite bakes `VITE_*` into the build at build time).
+
+   **Production env checklist**
+
+   | Variable | Required | Notes |
+   |----------|----------|--------|
+   | `VITE_SUPABASE_URL` | Yes | `https://<ref>.supabase.co` |
+   | `VITE_SUPABASE_ANON_KEY` | Yes | Anon JWT or `sb_publishable_...` |
+   | `VITE_APP_BASE_URL` | Optional | Defaults to current origin; set to your canonical site URL if needed. Must be listed under Supabase **Authentication → URL Configuration → Redirect URLs**. |
+
+   If magic link or auth fails with a **fetch / invalid URL** error, the usual cause is a missing or malformed `VITE_SUPABASE_URL` at **build** time, or only one of the two Supabase vars set on the host.
+
 7. (Optional) Seed a few users by signing in and creating/accepting invite codes from the app.
 
 ## MVP scope implemented

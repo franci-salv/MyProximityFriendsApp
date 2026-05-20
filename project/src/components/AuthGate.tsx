@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { SIMULATOR_CITIES } from '../data/cities';
-import { hasSupabaseEnv, supabase, upsertProfile } from '../lib/supabase';
+import { getEmailRedirectUrl, hasSupabaseEnv, supabase, supabaseEnvIssue, upsertProfile } from '../lib/supabase';
 import type { AppCity, UserProfile } from '../types/models';
 
 interface AuthGateProps {
@@ -25,10 +25,10 @@ export function AuthGate({ onAuthenticated }: AuthGateProps) {
   }, [name]);
 
   const handleMagicLink = async () => {
-    if (!email.trim()) return;
+    if (!hasSupabaseEnv || !email.trim()) return;
     setIsBusy(true);
     setStatus(null);
-    const redirectTo = import.meta.env.VITE_APP_BASE_URL || window.location.origin;
+    const redirectTo = getEmailRedirectUrl();
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim(),
       options: { emailRedirectTo: redirectTo },
@@ -102,6 +102,10 @@ export function AuthGate({ onAuthenticated }: AuthGateProps) {
       <div className="mt-5 rounded-2xl bg-orange-50 p-3 text-sm text-zinc-700">
         Avatar preview: <span className="font-semibold">{avatar}</span>
       </div>
+
+      {supabaseEnvIssue ? (
+        <p className="mt-4 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-800">{supabaseEnvIssue}</p>
+      ) : null}
 
       {hasSupabaseEnv ? (
         <>
