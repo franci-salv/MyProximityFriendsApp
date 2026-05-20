@@ -86,19 +86,28 @@ export async function getProfile(id: string) {
 }
 
 export async function getContactsForUser(userId: string) {
-  const { data: friendships, error } = await supabase
+  const { data: outgoingEdges, error } = await supabase
     .from('friendships')
     .select('*')
     .eq('status', 'accepted')
-    .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
+    .eq('requester_id', userId)
     .returns<FriendshipRow[]>();
   if (error) throw error;
 
-  const friendIds = Array.from(
-    new Set(
-      (friendships ?? []).map((row) => (row.requester_id === userId ? row.addressee_id : row.requester_id)).filter(Boolean),
-    ),
-  );
+  const outgoingFriendIds = Array.from(new Set((outgoingEdges ?? []).map((row) => row.addressee_id).filter(Boolean)));
+  if (outgoingFriendIds.length === 0) return [];
+
+  const { data: reverseEdges, error: reverseError } = await supabase
+    .from('friendships')
+    .select('*')
+    .eq('status', 'accepted')
+    .eq('addressee_id', userId)
+    .in('requester_id', outgoingFriendIds)
+    .returns<FriendshipRow[]>();
+  if (reverseError) throw reverseError;
+
+  const mutualFriendIds = new Set((reverseEdges ?? []).map((row) => row.requester_id));
+  const friendIds = outgoingFriendIds.filter((friendId) => mutualFriendIds.has(friendId));
   if (friendIds.length === 0) return [];
 
   const { data: profiles, error: profilesError } = await supabase
@@ -160,14 +169,18 @@ export async function acceptInvite(userId: string, code: string) {
   if (!data) throw new Error('Invite code is invalid or expired.');
   if (data.created_by === userId) throw new Error('You cannot accept your own invite.');
 
-  const { error: friendshipError } = await supabase.from('friendships').insert({
-    requester_id: data.created_by,
-    addressee_id: userId,
-    status: 'accepted',
-  });
-  if (friendshipError && !friendshipError.message.includes('duplicate')) {
-    throw friendshipError;
-  }
+  const { error: friendshipError } = await supabase.from('friendships').upsert(
+    {
+      requester_id: userId,
+      addressee_id: data.created_by,
+      status: 'accepted',
+    },
+    {
+      onConflict: 'requester_id,addressee_id',
+      ignoreDuplicates: true,
+    },
+  );
+  if (friendshipError) throw friendshipError;
 
   const { error: inviteError } = await supabase
     .from('invites')

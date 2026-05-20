@@ -15,7 +15,9 @@ npm run dev
 ## Manual setup before launch
 
 1. Create a Supabase project.
-2. In SQL editor, run `supabase/migrations/20260520114500_friends_mvp.sql`.
+2. In SQL editor, run migrations in order:
+   - `supabase/migrations/20260520114500_friends_mvp.sql`
+   - `supabase/migrations/20260520120600_enforce_mutual_friend_privacy.sql`
 3. In Authentication -> Providers, enable Email provider (magic link).
 4. In Authentication -> URL Configuration:
    - Site URL: your production URL (or `http://localhost:5173` for local testing)
@@ -31,7 +33,7 @@ npm run dev
 - Supabase auth session flow with email magic link.
 - Profile bootstrap/create after auth.
 - Invite creation and acceptance UI + DB writes.
-- Friend list from accepted friendships and profile/location tables.
+- Friend list/map/proximity based on mutual friendships only (both directed edges exist).
 - Simulator-driven city updates with changed-city write policy.
 - Proximity event writes and DB-backed history timeline.
 - Map/list views backed by real friend rows with demo fallback.

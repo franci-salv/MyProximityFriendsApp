@@ -232,7 +232,7 @@ function App() {
       addEvent({
         type: 'system',
         title: 'Invite accepted',
-        description: 'Friendship has been created.',
+        description: 'You added this user. You become mutual friends when they also add you.',
         city: currentCity,
       });
       await refreshContactsAndHistory();
